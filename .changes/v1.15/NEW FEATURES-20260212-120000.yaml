@@ -1,0 +1,5 @@
+kind: NEW FEATURES
+body: 'backend/elasticsearch: Add Elasticsearch as a remote state backend, supporting state storage, locking, and workspaces with multiple authentication methods and TLS configuration.'
+time: 2026-02-12T12:00:00.000000+00:00
+custom:
+    Issue: "38162"
