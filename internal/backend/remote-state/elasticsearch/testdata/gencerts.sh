@@ -8,9 +8,9 @@
 set -ex
 
 # Nuke and recreate the certs dir
-rm -rf certs
-mkdir certs
-cd certs || exit 1
+rm -rf testdata/certs
+mkdir testdata/certs
+cd testdata/certs || exit 1
 
 # CA
 openssl genrsa -out ca.key 4096
