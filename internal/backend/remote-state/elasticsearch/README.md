@@ -1,4 +1,4 @@
-# How to test the `elasticsearch` backend
+# Elasticsearch Remote State Backend
 
 ## Create an Elasticsearch resource in a Docker container
 
@@ -53,8 +53,8 @@ done
 
 Set the following environment variables:
 
-```
-ELASTICSEARCH_URL=https://localhost:9200
+```bash
+export ELASTICSEARCH_URL=https://localhost:9200
 ```
 
 ## Run the tests!

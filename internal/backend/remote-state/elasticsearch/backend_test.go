@@ -63,7 +63,7 @@ func TestBackendConfig(t *testing.T) {
 			},
 		},
 		{
-			Name: "with-ca-cert",
+			Name: "with-ca-cert-pem",
 			Config: map[string]interface{}{
 				"endpoints":          []interface{}{endpoint},
 				"index":              fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
@@ -73,7 +73,17 @@ func TestBackendConfig(t *testing.T) {
 			},
 		},
 		{
-			Name: "with-client-cert-key",
+			Name: "with-ca-cert-file",
+			Config: map[string]interface{}{
+				"endpoints":           []interface{}{endpoint},
+				"index":               fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":            "elastic",
+				"password":            "changeme",
+				"ca_certificate_file": "testdata/certs/ca.cert.pem",
+			},
+		},
+		{
+			Name: "with-client-cert-key-pem",
 			Config: map[string]interface{}{
 				"endpoints":              []interface{}{endpoint},
 				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
@@ -82,6 +92,18 @@ func TestBackendConfig(t *testing.T) {
 				"ca_certificate_pem":     string(caData),
 				"client_certificate_pem": string(certData),
 				"client_private_key_pem": string(keyData),
+			},
+		},
+		{
+			Name: "with-client-cert-key-file",
+			Config: map[string]interface{}{
+				"endpoints":               []interface{}{endpoint},
+				"index":                   fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":                "elastic",
+				"password":                "changeme",
+				"ca_certificate_file":     "testdata/certs/ca.cert.pem",
+				"client_certificate_file": "testdata/certs/client.crt",
+				"client_private_key_file": "testdata/certs/client.key",
 			},
 		},
 		{
@@ -158,6 +180,225 @@ func TestBackendConfig_invalidEndpoint(t *testing.T) {
 	errMsg := diags.Err().Error()
 	if !strings.Contains(errMsg, "failed to initialize Elasticsearch") {
 		t.Fatalf("Expected error about Elasticsearch initialization, got: %s", errMsg)
+	}
+}
+
+func TestBackendConfig_conflictingCertOptions(t *testing.T) {
+	testACC(t)
+
+	endpoint := getEndpoint()
+
+	caData, err := os.ReadFile("testdata/certs/ca.cert.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyData, err := os.ReadFile("testdata/certs/client.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certData, err := os.ReadFile("testdata/certs/client.crt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		Name          string
+		Config        map[string]interface{}
+		ExpectedError string
+	}{
+		{
+			Name: "ca-file-and-pem",
+			Config: map[string]interface{}{
+				"endpoints":           []interface{}{endpoint},
+				"index":               fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":            "elastic",
+				"password":            "changeme",
+				"ca_certificate_file": "testdata/certs/ca.cert.pem",
+				"ca_certificate_pem":  string(caData),
+			},
+			ExpectedError: "ca_certificate_file and ca_certificate_pem cannot both be set",
+		},
+		{
+			Name: "client-cert-file-and-pem",
+			Config: map[string]interface{}{
+				"endpoints":               []interface{}{endpoint},
+				"index":                   fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":                "elastic",
+				"password":                "changeme",
+				"ca_certificate_pem":      string(caData),
+				"client_certificate_file": "testdata/certs/client.crt",
+				"client_certificate_pem":  string(certData),
+				"client_private_key_pem":  string(keyData),
+			},
+			ExpectedError: "client_certificate_file and client_certificate_pem cannot both be set",
+		},
+		{
+			Name: "client-key-file-and-pem",
+			Config: map[string]interface{}{
+				"endpoints":               []interface{}{endpoint},
+				"index":                   fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":                "elastic",
+				"password":                "changeme",
+				"ca_certificate_pem":      string(caData),
+				"client_certificate_pem":  string(certData),
+				"client_private_key_file": "testdata/certs/client.key",
+				"client_private_key_pem":  string(keyData),
+			},
+			ExpectedError: "client_private_key_file and client_private_key_pem cannot both be set",
+		},
+		{
+			Name: "client-cert-without-key",
+			Config: map[string]interface{}{
+				"endpoints":              []interface{}{endpoint},
+				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":               "elastic",
+				"password":               "changeme",
+				"ca_certificate_pem":     string(caData),
+				"client_certificate_pem": string(certData),
+			},
+			ExpectedError: "client certificate is set but client private key is not",
+		},
+		{
+			Name: "client-key-without-cert",
+			Config: map[string]interface{}{
+				"endpoints":              []interface{}{endpoint},
+				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":               "elastic",
+				"password":               "changeme",
+				"ca_certificate_pem":     string(caData),
+				"client_private_key_pem": string(keyData),
+			},
+			ExpectedError: "client private key is set but client certificate is not",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			config := backend.TestWrapConfig(tc.Config)
+
+			b := New()
+
+			// Decode the HCL body to cty.Value
+			schema := b.ConfigSchema()
+			spec := schema.DecoderSpec()
+			obj, decDiags := hcldec.Decode(config, spec, nil)
+			if decDiags.HasErrors() {
+				t.Fatalf("Failed to decode config: %s", decDiags)
+			}
+
+			// Prepare and validate config
+			newObj, valDiags := b.PrepareConfig(obj)
+			if valDiags.HasErrors() {
+				t.Fatalf("Failed to prepare config: %s", valDiags.Err())
+			}
+
+			// Configure should fail with expected error
+			diags := b.Configure(newObj)
+			if !diags.HasErrors() {
+				t.Fatal("Expected configuration to fail, but it succeeded")
+			}
+
+			// Verify the error message contains expected text
+			errMsg := diags.Err().Error()
+			if !strings.Contains(errMsg, tc.ExpectedError) {
+				t.Fatalf("Expected error containing %q, got: %s", tc.ExpectedError, errMsg)
+			}
+		})
+	}
+}
+
+func TestBackendConfig_conflictingAuthMethods(t *testing.T) {
+	testACC(t)
+
+	endpoint := getEndpoint()
+
+	testCases := []struct {
+		Name          string
+		Config        map[string]interface{}
+		ExpectedError string
+	}{
+		{
+			Name: "username-and-api-key",
+			Config: map[string]interface{}{
+				"endpoints":              []interface{}{endpoint},
+				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":               "elastic",
+				"password":               "changeme",
+				"api_key":                "test-api-key",
+				"skip_cert_verification": true,
+			},
+			ExpectedError: "only one authentication method can be used",
+		},
+		{
+			Name: "username-and-bearer-token",
+			Config: map[string]interface{}{
+				"endpoints":              []interface{}{endpoint},
+				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":               "elastic",
+				"password":               "changeme",
+				"bearer_token":           "test-bearer-token",
+				"skip_cert_verification": true,
+			},
+			ExpectedError: "only one authentication method can be used",
+		},
+		{
+			Name: "api-key-and-bearer-token",
+			Config: map[string]interface{}{
+				"endpoints":              []interface{}{endpoint},
+				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"api_key":                "test-api-key",
+				"bearer_token":           "test-bearer-token",
+				"skip_cert_verification": true,
+			},
+			ExpectedError: "only one authentication method can be used",
+		},
+		{
+			Name: "all-three-auth-methods",
+			Config: map[string]interface{}{
+				"endpoints":              []interface{}{endpoint},
+				"index":                  fmt.Sprintf("terraform-test-%s", strings.ToLower(t.Name())),
+				"username":               "elastic",
+				"password":               "changeme",
+				"api_key":                "test-api-key",
+				"bearer_token":           "test-bearer-token",
+				"skip_cert_verification": true,
+			},
+			ExpectedError: "only one authentication method can be used",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			config := backend.TestWrapConfig(tc.Config)
+
+			b := New()
+
+			// Decode the HCL body to cty.Value
+			schema := b.ConfigSchema()
+			spec := schema.DecoderSpec()
+			obj, decDiags := hcldec.Decode(config, spec, nil)
+			if decDiags.HasErrors() {
+				t.Fatalf("Failed to decode config: %s", decDiags)
+			}
+
+			// Prepare and validate config
+			newObj, valDiags := b.PrepareConfig(obj)
+			if valDiags.HasErrors() {
+				t.Fatalf("Failed to prepare config: %s", valDiags.Err())
+			}
+
+			// Configure should fail with expected error
+			diags := b.Configure(newObj)
+			if !diags.HasErrors() {
+				t.Fatal("Expected configuration to fail, but it succeeded")
+			}
+
+			// Verify the error message contains expected text
+			errMsg := diags.Err().Error()
+			if !strings.Contains(errMsg, tc.ExpectedError) {
+				t.Fatalf("Expected error containing %q, got: %s", tc.ExpectedError, errMsg)
+			}
+		})
 	}
 }
 
